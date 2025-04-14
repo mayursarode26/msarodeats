@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Results - Resume Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f8f9fc;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    .container {
+      max-width: 960px;
+    }
+    .skill-tag {
+      background-color: #d1ecf1;
+      color: #0c5460;
+      border-radius: 12px;
+      padding: 6px 12px;
+      margin: 3px;
+      display: inline-block;
+    }
+    .section-title {
+      font-weight: 600;
+      margin-top: 30px;
+      color: #343a40;
+    }
+    .progress {
+      background-color: #e9ecef;
+      border-radius: 30px;
+      overflow: hidden;
+    }
+    pre {
+      font-size: 0.95rem;
+      margin: 0;
+    }
+    .header-bar {
+      background-color: #ffffff;
+      padding: 20px 0;
+      border-bottom: 1px solid #dee2e6;
+    }
+    .back-btn {
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header-bar text-center">
+    <h2 class="fw-bold text-primary">📄 Resume Report</h2>
+    <p class="text-muted mb-0">{{ name }} | {{ email }} | Level: {{ level }}</p>
+  </div>
+
+  <div class="container mt-4">
+
+    <div>
+      <h5 class="section-title">🛠️ Skills Extracted</h5>
+      {% for skill in skills %}
+        <span class="skill-tag">{{ skill }}</span>
+      {% endfor %}
+    </div>
+
+    <div>
+      <h5 class="section-title">📈 Resume Score</h5>
+      <div class="progress mb-2" style="height: 24px;">
+        <div class="progress-bar bg-success" style="width: {{ resume_score }}%;">
+          {{ resume_score }}%
+        </div>
+      </div>
+    </div>
+
+    {% if ats_score %}
+    <div>
+      <h5 class="section-title">🧠 ATS Match Score</h5>
+      <div class="progress mb-2" style="height: 24px;">
+        <div class="progress-bar bg-info" style="width: {{ ats_score }}%;">
+          {{ ats_score }}%
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h5 class="section-title">💡 ATS Suggestions</h5>
+      <div class="border rounded p-3 bg-light">
+        <pre style="white-space: pre-wrap;">{{ suggestions }}</pre>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if recommended_courses %}
+    <div>
+      <h5 class="section-title">📚 Recommended Courses</h5>
+      <ul>
+        {% for course in recommended_courses %}
+          <li>{{ course }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="back-btn">
+      <a href="{{ url_for('index') }}" class="btn btn-secondary">
+        🔙 Analyze Another Resume
+      </a>
+    </div>
+
+  </div>
+
+</body>
+</html>

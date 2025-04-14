@@ -1,0 +1,175 @@
+from flask import Flask, render_template, request, redirect, url_for, send_file
+import os, time, datetime, sqlite3
+import base64, json, random
+from pyresparser import ResumeParser
+from pdfminer3.layout import LAParams
+from pdfminer3.pdfpage import PDFPage
+from pdfminer3.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer3.converter import TextConverter
+import io
+from Courses import ds_course, web_course, android_course, ios_course, uiux_course
+import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+# === Configurations ===
+UPLOAD_FOLDER = 'Uploaded_Resumes'
+genai.configure(api_key="AIzaSyCwbDCula-Gg7UecSGj4Jp8wnEPuU8Pg4M")
+model = genai.GenerativeModel("gemini-1.5-flash")
+bert_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# === DB ===
+conn = sqlite3.connect('sra_database.db', check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS user_data (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    Name TEXT NOT NULL, Email_ID TEXT NOT NULL, resume_score TEXT NOT NULL, Timestamp TEXT NOT NULL,
+    Page_no TEXT NOT NULL, Predicted_Field TEXT NOT NULL, User_level TEXT NOT NULL,
+    Actual_skills TEXT NOT NULL, Recommended_skills TEXT NOT NULL, Recommended_courses TEXT NOT NULL
+)''')
+conn.commit()
+
+# === Helpers ===
+def pdf_reader(file_path):
+    resource_manager = PDFResourceManager()
+    fake_file_handle = io.StringIO()
+    converter = TextConverter(resource_manager, fake_file_handle, laparams=LAParams())
+    with open(file_path, 'rb') as fh:
+        for page in PDFPage.get_pages(fh, caching=True, check_extractable=True):
+            interpreter = PDFPageInterpreter(resource_manager, converter)
+            interpreter.process_page(page)
+    text = fake_file_handle.getvalue()
+    converter.close()
+    fake_file_handle.close()
+    return text
+
+def calculate_ats_score(job_desc, resume_text):
+    job_embedding = bert_model.encode(job_desc, convert_to_tensor=True)
+    resume_embedding = bert_model.encode(resume_text, convert_to_tensor=True)
+    return round(float(np.dot(job_embedding, resume_embedding) / (np.linalg.norm(job_embedding) * np.linalg.norm(resume_embedding))) * 100, 2)
+
+def course_recommender(course_list, count=4):
+    random.shuffle(course_list)
+    return course_list[:count]
+
+def insert_data(name, email, res_score, timestamp, no_of_pages, reco_field, cand_level, skills, recommended_skills, courses):
+    cursor.execute("""
+        INSERT INTO user_data (Name, Email_ID, resume_score, Timestamp, Page_no, Predicted_Field, User_level, Actual_skills, Recommended_skills, Recommended_courses)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, email, str(res_score), timestamp, str(no_of_pages), reco_field, cand_level, str(skills), str(recommended_skills), str(courses)))
+    conn.commit()
+
+# === Routes ===
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file = request.files['resume']
+        job_desc = request.form.get('job_description')
+
+        if file:
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+            file.save(file_path)
+
+            resume_data = ResumeParser(file_path).get_extracted_data()
+            resume_text = pdf_reader(file_path)
+
+            name = resume_data.get('name', 'Unknown')
+            email = resume_data.get('email', '')
+            pages = resume_data.get('no_of_pages', 1)
+            skills = resume_data.get('skills', [])
+
+            # Candidate level logic
+            if pages == 1:
+                level = "Fresher"
+            elif pages == 2:
+                level = "Intermediate"
+            else:
+                level = "Experienced"
+
+            # Field prediction
+            reco_field = ""
+            recommended_skills = []
+            recommended_courses = []
+
+            fields = {
+                'Data Science': ds_course,
+                'Web Development': web_course,
+                'Android Development': android_course,
+                'IOS Development': ios_course,
+                'UI-UX Development': uiux_course,
+            }
+
+            keywords = {
+                'Data Science': ['tensorflow', 'keras', 'pytorch'],
+                'Web Development': ['react', 'django', 'node js'],
+                'Android Development': ['android', 'kotlin', 'flutter'],
+                'IOS Development': ['swift', 'xcode', 'ios'],
+                'UI-UX Development': ['figma', 'adobe xd', 'ux', 'ui'],
+            }
+
+            for field, kws in keywords.items():
+                if any(skill.lower() in kws for skill in skills):
+                    reco_field = field
+                    recommended_courses = course_recommender(fields[field])
+                    recommended_skills = kws
+                    break
+
+            ts = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+
+            resume_score = 0
+            for keyword in ['Objective', 'Declaration', 'Hobbies']:
+                if keyword.lower() in resume_text.lower():
+                    resume_score += 20
+            if len(skills) > 3:
+                resume_score += 20
+
+            insert_data(name, email, resume_score, ts, pages, reco_field, level, skills, recommended_skills, recommended_courses)
+
+            ats_score = 0
+            ats_feedback = ""
+            if job_desc:
+                ats_score = calculate_ats_score(job_desc, resume_text)
+                gemini_prompt = f"""
+                    You are an skilled ATS (Applicant Tracking System) scanner with a deep understanding of data science and ATS functionality,
+                    your task is to evaluate the resume against the provided job description. give me the percentage of match if the resume matches
+                    the job description. First the output should come as keywords missing and last final thoughts.Keep the response breif and effective.
+
+                    Resume:
+                    {resume_text}
+
+                    Job Description:
+                    {job_desc}
+
+                    Provide the suggestions in a clear and structured bullet point format.
+                    Return concise, actionable suggestions.
+                    """
+                response = model.generate_content(gemini_prompt)
+                ats_feedback = response.text
+
+            return render_template('result.html', name=name, email=email, level=level,
+                                   reco_field=reco_field, skills=skills, ats_score=ats_score,
+                                   suggestions=ats_feedback, resume_score=resume_score,
+                                   recommended_courses=recommended_courses)
+
+    return render_template('index.html')
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if request.method == 'POST':
+        user = request.form.get('username')
+        password = request.form.get('password')
+        if user == "admin" and password == "admin123":
+            cursor.execute("SELECT * FROM user_data")
+            data = cursor.fetchall()
+            return render_template('admin.html', records=data)
+        else:
+            return render_template('admin.html', error="Wrong credentials!")
+    return render_template('admin.html')
+
+# === Run ===
+if __name__ == '__main__':
+    app.run(debug=True)
